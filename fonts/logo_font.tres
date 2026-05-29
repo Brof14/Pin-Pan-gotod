@@ -1,0 +1,10 @@
+[gd_resource type="Font" load_steps=2 format=3 uid="uid://logo_font"]
+
+[sub_resource type="VectorImage" id="VectorImage_xk4y8"]
+width = 512
+height = 512
+
+[resource]
+font_data = SubResource("VectorImage_xk4y8")
+size = 72
+oversampling = 2.0

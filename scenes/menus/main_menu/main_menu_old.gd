@@ -25,7 +25,6 @@ var mouse_pos = Vector2.ZERO
 var parallax_strength = 0.02
 
 func _ready():
-	print("Main menu loaded!")
 	setup_background()
 	setup_characters()
 	setup_threads()
@@ -111,11 +110,10 @@ func setup_threads():
 
 	# Apply glow shader
 	var thread_shader = load("res://shaders/thread_glow.gdshader")
-	if thread_shader:
-		thread1.material = ShaderMaterial.new()
-		thread1.material.shader = thread_shader
-		thread2.material = ShaderMaterial.new()
-		thread2.material.shader = thread_shader
+	thread1.material = ShaderMaterial.new()
+	thread1.material.shader = thread_shader
+	thread2.material = ShaderMaterial.new()
+	thread2.material.shader = thread_shader
 
 func setup_particles():
 	# Warm orange glowing particles
@@ -133,7 +131,30 @@ func setup_lighting():
 	bloom_effect.color = Color(0, 0, 0, 0.1)
 
 func setup_buttons():
-	# Simple button setup
+	# Custom button styling using theme overrides
+	var theme = Theme.new()
+
+	# Create base style for all buttons
+	var base_stylebox = StyleBoxFlat.new()
+	base_stylebox.bg_color = Color(0, 0, 0, 0.6)
+	base_stylebox.corner_radius_top_left = 10
+	base_stylebox.corner_radius_top_right = 10
+	base_stylebox.corner_radius_bottom_left = 10
+	base_stylebox.corner_radius_bottom_right = 10
+	base_stylebox.content_margin_left = 20
+	base_stylebox.content_margin_right = 20
+	base_stylebox.content_margin_top = 10
+	base_stylebox.content_margin_bottom = 10
+
+	# Add styles to theme
+	theme.add_stylebox("normal", "Button", base_stylebox)
+	theme.add_stylebox("hover", "Button", base_stylebox)
+	theme.add_stylebox("pressed", "Button", base_stylebox)
+
+	# Set font size
+	theme.add_font_size("font_size", "Button", 24)
+
+	# Apply theme to buttons
 	continue_button.add_theme_color("font_color", Color(1, 1, 1, 1))
 	new_game_button.add_theme_color("font_color", Color(1, 1, 1, 1))
 	settings_button.add_theme_color("font_color", Color(1, 1, 1, 1))
@@ -223,11 +244,11 @@ func update_thread_animation():
 
 	# Update shader uniforms
 	if thread1.material and thread1.material.shader:
-		thread1.material.set_shader_parameter("time", time)
-		thread1.material.set_shader_parameter("glow_intensity", 0.5)
+		thread1.material.material.set_shader_parameter("time", time)
+		thread1.material.material.set_shader_parameter("glow_intensity", 0.5)
 	if thread2.material and thread2.material.shader:
-		thread2.material.set_shader_parameter("time", time)
-		thread2.material.set_shader_parameter("glow_intensity", 0.5)
+		thread2.material.material.set_shader_parameter("time", time)
+		thread2.material.material.set_shader_parameter("glow_intensity", 0.5)
 
 func update_particles():
 	# Particle drift
@@ -242,6 +263,18 @@ func update_bloom():
 func update_logo():
 	# Create glowing thread effect on logo
 	var glow_intensity = (sin(time * 2.0) + 1.0) * 0.5
+	var theme = Theme.new()
+
+	# Create gradient effect for PIN
+	var pin_color = Color(1.0, 0.3, 0.3, 1.0)
+	pin_color = pin_color.lerp(Color(1.0, 0.6, 0.6, 1.0), glow_intensity * 0.3)
+
+	# Create gradient effect for PAN
+	var pan_color = Color(0.3, 0.3, 1.0, 1.0)
+	pan_color = pan_color.lerp(Color(0.6, 0.6, 1.0, 1.0), glow_intensity * 0.3)
+
+	# Update label with colored text effect
+	# Note: Godot Label doesn't support per-character coloring, so we'll use a simple glow effect
 	logo.modulate = Color(1.0 + glow_intensity * 0.2, 1.0 + glow_intensity * 0.2, 1.0 + glow_intensity * 0.2, 1.0)
 
 func _on_button_hover(button):

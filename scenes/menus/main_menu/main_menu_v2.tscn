@@ -1,4 +1,4 @@
-[gd_scene format=3 uid="uid://dc2hxb7s0xv87"]
+[gd_scene format=3 uid="uid://c2mmjp30g8uij"]
 
 [ext_resource type="Script" path="res://scenes/menus/main_menu/main_menu.gd" id="1_peecx"]
 
@@ -40,7 +40,6 @@ color = Color(0, 0, 0, 0.4)
 pivot_offset = Vector2(60, 30)
 
 [node name="BlueCharacterMesh" type="MeshInstance2D" parent="/MainMenu/CharacterLayer/BlueCharacter/BlueCharacterBody" unique_id=123456792]
-mesh = SubResource("CircleMesh_v3mn4")
 texture_filter = 3
 
 [node name="RedCharacter" type="Node2D" parent="/MainMenu/CharacterLayer" unique_id=123456793]
@@ -55,7 +54,6 @@ color = Color(0, 0, 0, 0.4)
 pivot_offset = Vector2(60, 30)
 
 [node name="RedCharacterMesh" type="MeshInstance2D" parent="/MainMenu/CharacterLayer/RedCharacter/RedCharacterBody" unique_id=123456796]
-mesh = SubResource("CircleMesh_v3mn5")
 texture_filter = 3
 
 [node name="EffectsLayer" type="CanvasLayer" parent="/MainMenu"]
@@ -84,11 +82,6 @@ unshaded = true
 
 [sub_resource type="QuadMesh" id="DrawPass_v3c71"]
 material = SubResource("ProcessMaterial_v3s5c")
-
-[sub_resource type="CircleMesh" id="CircleMesh_v3mn4"]
-radius = 60
-[sub_resource type="CircleMesh" id="CircleMesh_v3mn5"]
-radius = 60
 
 [node name="ThreadConnections" type="Node2D" parent="/MainMenu/EffectsLayer" unique_id=123456798]
 

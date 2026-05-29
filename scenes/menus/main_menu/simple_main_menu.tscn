@@ -1,0 +1,14 @@
+[gd_scene format=3 uid="uid://simple_menu"]
+
+[ext_resource type="Script" path="res://scenes/menus/main_menu/simple_main_menu.gd" id="1_simple"]
+
+[node name="MainMenu" type="Control"]
+script = ExtResource("1_simple")
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Label" type="Label" parent="/MainMenu"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+text = "Simple Menu Test"
+align = 1
