@@ -8,7 +8,10 @@ func _init() -> void:
 	game._process(0.01)
 	assert(game.app_state == game.AppState.MENU)
 	game._start_new_game()
-	for i in range(12):
+	for i in range(20):
+		game._process(0.1)
+	assert(game.app_state == game.AppState.PROLOGUE or game.app_state == game.AppState.LOADING)
+	while game.app_state == game.AppState.LOADING:
 		game._process(0.1)
 	assert(game.app_state == game.AppState.PROLOGUE)
 	game.pin_awake = 1.0
@@ -37,13 +40,14 @@ func _init() -> void:
 	assert(game.app_state == game.AppState.GAME)
 	game.settings_return = game.AppState.GAME
 	game.app_state = game.AppState.SETTINGS
-	game._click(Vector2(1095, 340))
-	assert(game.settings.master == 50)
+	game._click(Vector2(1095, 300))
+	assert(game.settings_data.master == 50)
 	assert(game.dragged_slider == 0)
 	game.dragged_slider = -1
 	game._set_slider(0, 42)
-	assert(game.settings.master == 42)
+	assert(game.settings_data.master == 42)
 	game._close_settings()
 	assert(game.app_state == game.AppState.GAME)
+	assert(game.save_data.can_continue())
 	print("SMOKE_OK")
 	quit()

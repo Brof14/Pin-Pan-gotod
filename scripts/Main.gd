@@ -52,7 +52,15 @@ var checkpoint_room := 0
 var memory_nodes := 0
 var memories: Array[int] = []
 var ending := ""
-var settings := {"master": 80, "music": 80, "sfx": 80, "thread": 65, "symbols": false, "motion": false, "contrast": false}
+var settings_data := PinPanSettings.new()
+var save_data := PinPanSave.new()
+var menu_system := MenuSystem.new()
+var ui_audio := PinPanUIAudio.new()
+var menu_camera := Vector2.ZERO
+var last_mouse_moved := false
+var pending_action := ""
+var play_confirm := false
+var settings_tab := 0
 
 var pin_pos := Vector2(260.0, 740.0)
 var pan_pos := Vector2(410.0, 740.0)
@@ -111,12 +119,16 @@ var dragged_slider := -1
 func _ready() -> void:
 	font = ThemeDB.fallback_font
 	sfx_player = AudioStreamPlayer.new()
-	sfx_player.bus = &"Master"
+	sfx_player.bus = &"SFX"
 	add_child(sfx_player)
+	ui_audio.setup(sfx_player, settings_data)
 	for i in range(64):
 		particles.append({"p": Vector2(fposmod(float(i * 137), 1920.0), fposmod(float(i * 83), 1080.0)), "speed": 2.0 + float(i % 6), "alpha": 0.05 + float(i % 4) * 0.03})
 	_load_save()
+	menu_system.reset()
+	menu_system.pin_cursor.reset(mouse)
 	_configure_room(0, false)
+	settings_data.apply_audio_buses()
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -136,9 +148,9 @@ func _process(delta: float) -> void:
 	screen_shake = maxf(0.0, screen_shake - delta * 2.8)
 	thread_flash = maxf(0.0, thread_flash - delta * 2.4)
 	if app_state == AppState.LOADING:
-		loading = min(1.0, loading + delta * 1.3)
-		if loading >= 1.0:
-			_start_prologue()
+		menu_system.loading_progress = minf(1.0, menu_system.loading_progress + delta * 1.3)
+		loading = menu_system.loading_progress
+		_update_menu(delta)
 	elif app_state == AppState.PROLOGUE:
 		_update_prologue(delta)
 	elif app_state == AppState.GAME:
@@ -146,10 +158,47 @@ func _process(delta: float) -> void:
 	elif app_state == AppState.INTRO:
 		intro_time += delta
 		if intro_time >= 14.0:
-			app_state = AppState.MENU
-			state_time = 0.0
+			_enter_menu()
+	elif app_state == AppState.MENU:
+		_update_menu(delta)
 	_update_camera(delta)
 	queue_redraw()
+
+func _enter_menu() -> void:
+	app_state = AppState.MENU
+	state_time = 0.0
+	menu_system.reset()
+	menu_focus = 0
+	menu_system.focus_index = 0
+	fade = 0.35
+
+func _update_menu(delta: float) -> void:
+	last_mouse_moved = false
+	menu_system.process(delta, save_data, settings_data, mouse, mouse_moved)
+	menu_focus = menu_system.focus_index
+	if menu_system.consume_focus_changed():
+		ui_audio.play(PinPanUIAudio.Event.PIN_FOCUS if menu_focus % 2 == 0 else PinPanUIAudio.Event.PAN_FOCUS, time)
+	if app_state == AppState.LOADING:
+		if menu_system.loading_ready and menu_system.loading_progress >= 1.0:
+			if pending_action == "continue":
+				_begin_act_gameplay(save_data.checkpoint_room)
+			else:
+				_start_prologue()
+	elif menu_system.state == MenuSystem.MenuState.ERROR:
+		app_state = AppState.MENU
+		ui_audio.play(PinPanUIAudio.Event.ERROR, time)
+	if menu_system.transition_active and menu_system.transition_fade >= 1.0 and menu_system.loading_ready:
+		if pending_action == "continue":
+			_begin_act_gameplay(save_data.checkpoint_room)
+		else:
+			_start_prologue()
+
+func _sync_legacy_flags() -> void:
+	game_started = save_data.game_started
+	act_complete = save_data.act_one_complete
+	checkpoint_room = save_data.checkpoint_room
+	memory_nodes = save_data.memory_nodes
+	memories = save_data.memories.duplicate()
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
@@ -172,9 +221,8 @@ func _input(event: InputEvent) -> void:
 
 func _key(key: Key) -> void:
 	if app_state == AppState.INTRO:
-		if intro_time >= 2.0 and key in [KEY_SPACE, KEY_ENTER, KEY_ESCAPE]:
-			app_state = AppState.MENU
-			state_time = 0.0
+		if intro_time >= 3.0 and key in [KEY_SPACE, KEY_ENTER, KEY_ESCAPE]:
+			_enter_menu()
 		return
 	if app_state == AppState.PROLOGUE:
 		if key in [KEY_A, KEY_W, KEY_S, KEY_D] and prologue_state == PrologueState.WAKE:
@@ -199,10 +247,18 @@ func _key(key: Key) -> void:
 			_try_cut_or_ignite()
 		return
 	if app_state == AppState.MENU:
+		if play_confirm:
+			if key in [KEY_ENTER, KEY_SPACE]:
+				_confirm_new_game()
+			elif key == KEY_ESCAPE:
+				play_confirm = false
+			return
 		if key in [KEY_DOWN, KEY_S]:
-			menu_focus = (menu_focus + 1) % _menu_options().size()
+			if menu_system.navigate(1, save_data):
+				ui_audio.play(PinPanUIAudio.Event.HOVER, time)
 		elif key in [KEY_UP, KEY_W]:
-			menu_focus = posmod(menu_focus - 1, _menu_options().size())
+			if menu_system.navigate(-1, save_data):
+				ui_audio.play(PinPanUIAudio.Event.HOVER, time)
 		elif key in [KEY_ENTER, KEY_SPACE]:
 			_activate_menu(menu_focus)
 		elif key == KEY_ESCAPE:
@@ -278,21 +334,29 @@ func _joy_button(button: JoyButton, device: int) -> void:
 
 func _click(p: Vector2) -> void:
 	if app_state == AppState.INTRO:
-		if intro_time >= 2.0:
-			app_state = AppState.MENU
-			state_time = 0.0
+		if intro_time >= 3.0:
+			_enter_menu()
 		return
 	if app_state == AppState.MENU:
-		var index := _menu_hit(p)
+		if play_confirm:
+			if Rect2(690, 520, 270, 64).has_point(p):
+				_confirm_new_game()
+			elif Rect2(970, 520, 270, 64).has_point(p):
+				play_confirm = false
+			return
+		var index := menu_system.hit_test(p, save_data)
 		if index >= 0:
+			menu_system.set_focus(index, save_data)
 			menu_focus = index
 			_activate_menu(index)
 	elif app_state == AppState.SETTINGS:
 		var row := _settings_hit(p)
 		if row >= 0:
 			settings_focus = row
-			if row < 4:
+			if row < 7:
 				var value := int(clamp((p.x - 900.0) / 3.9, 0.0, 100.0))
+				if settings_focus == 5:
+					value = int(clamp((p.x - 900.0) / 3.9 + 50.0, 50.0, 150.0))
 				_set_slider(row, value)
 				dragged_slider = row
 			else:
@@ -316,10 +380,11 @@ func _click(p: Vector2) -> void:
 		_return_to_menu()
 
 func _update_hover_from_mouse() -> void:
-	if app_state == AppState.MENU:
-		var i := _menu_hit(mouse)
-		if i >= 0:
+	if app_state == AppState.MENU and not play_confirm:
+		var i := menu_system.hit_test(mouse, save_data)
+		if i >= 0 and menu_system.set_focus(i, save_data):
 			menu_focus = i
+			ui_audio.play(PinPanUIAudio.Event.HOVER, time)
 	elif app_state == AppState.SETTINGS:
 		var row := _settings_hit(mouse)
 		if row >= 0:
@@ -330,92 +395,142 @@ func _update_hover_from_mouse() -> void:
 			pause_focus = pause_index
 
 func _menu_options() -> Array[String]:
-	var options: Array[String] = []
-	options.append("ПРОДОЛЖИТЬ" if game_started and not act_complete else "ИГРАТЬ")
-	if game_started:
-		options.append("НАЧАТЬ ЗАНОВО")
-	options.append("НАСТРОЙКИ")
-	options.append("ВЫХОД")
-	return options
+	return menu_system.item_labels(save_data)
+
+func _menu_item_id(index: int) -> String:
+	var ids := menu_system.item_ids(save_data)
+	if index < 0 or index >= ids.size():
+		return ""
+	return ids[index]
 
 func _menu_hit(p: Vector2) -> int:
-	for i in _menu_options().size():
-		if Rect2(156.0, 540.0 + i * 76.0, 470.0, 60.0).grow(18.0).has_point(p):
-			return i
-	return -1
+	return menu_system.hit_test(p, save_data)
 
 func _activate_menu(index: int) -> void:
-	var options := _menu_options()
-	if index < 0 or index >= options.size():
+	var item_id := _menu_item_id(index)
+	if item_id == "":
 		return
-	match options[index]:
-		"ИГРАТЬ", "НАЧАТЬ ЗАНОВО":
-			_start_new_game()
-		"ПРОДОЛЖИТЬ":
-			if app_state == AppState.MENU:
-				_begin_act_gameplay(checkpoint_room)
-		"НАСТРОЙКИ":
+	menu_system.register_input()
+	match item_id:
+		"PLAY":
+			if save_data.can_continue():
+				play_confirm = true
+				state_time = 0.0
+			else:
+				_begin_play_new()
+		"CONTINUE":
+			if save_data.can_continue():
+				_begin_continue()
+		"SETTINGS":
 			settings_return = AppState.MENU
 			app_state = AppState.SETTINGS
 			settings_focus = 0
 			state_time = 0.0
-		"ВЫХОД":
+			ui_audio.play(PinPanUIAudio.Event.OPEN, time)
+		"EXIT":
 			app_state = AppState.EXIT_CONFIRM
 			state_time = 0.0
 
-func _start_new_game() -> void:
-	game_started = true
-	act_complete = false
-	checkpoint_room = 0
-	memory_nodes = 0
-	memories.clear()
-	ending = ""
-	_save_progress()
+func _begin_play_new() -> void:
+	save_data.mark_new_game()
+	_sync_legacy_flags()
+	pending_action = "new"
+	menu_system.begin_loading()
+	menu_system.begin_transition()
 	app_state = AppState.LOADING
 	loading = 0.0
 	state_time = 0.0
-	fade = 0.35
+	fade = 0.0
+	ui_audio.play(PinPanUIAudio.Event.SELECT, time)
+	menu_system.pin_cursor.trigger_select()
+	_save_progress()
+
+func _confirm_new_game() -> void:
+	play_confirm = false
+	_begin_play_new()
+
+func _begin_continue() -> void:
+	pending_action = "continue"
+	menu_system.begin_loading()
+	menu_system.begin_transition()
+	app_state = AppState.LOADING
+	loading = 0.0
+	state_time = 0.0
+	ui_audio.play(PinPanUIAudio.Event.SELECT, time)
+	menu_system.pin_cursor.trigger_select()
+	_sync_legacy_flags()
+
+func _start_new_game() -> void:
+	_begin_play_new()
 
 func _return_to_menu() -> void:
 	app_state = AppState.MENU
 	state_time = 0.0
 	fade = 0.35
 	menu_focus = 0
+	menu_system.reset()
+	menu_system.focus_index = 0
 	_save_progress()
 
 func _settings_rows() -> Array[String]:
-	return ["ГРОМКОСТЬ", "МУЗЫКА", "ЭФФЕКТЫ", "НАТЯЖЕНИЕ НИТИ", "СИМВОЛЫ РОЛЕЙ", "УМЕНЬШИТЬ ДВИЖЕНИЕ", "ВЫСОКИЙ КОНТРАСТ", "НАЗАД"]
+	return [
+		"ОБЩАЯ ГРОМКОСТЬ", "МУЗЫКА", "ЭФФЕКТЫ", "АТМОСФЕРА", "НАТЯЖЕНИЕ НИТИ",
+		"ЯРКОСТЬ", "ТРЯСКА ЭКРАНА", "ПАЛИТРА", "СИМВОЛЫ РОЛЕЙ",
+		"УМЕНЬШИТЬ ДВИЖЕНИЕ", "МЯГКАЯ ВСПЫШКА", "ВЫСОКИЙ КОНТРАСТ", "НАЗАД"
+	]
 
 func _settings_hit(p: Vector2) -> int:
 	for i in _settings_rows().size():
-		if Rect2(415.0, 318.0 + i * 62.0, 1080.0, 52.0).has_point(p):
+		if Rect2(415.0, 241.0 + i * 56.0, 1080.0, 52.0).has_point(p):
 			return i
 	return -1
 
 func _set_slider(index: int, value: int) -> void:
 	match index:
-		0: settings.master = value
-		1: settings.music = value
-		2: settings.sfx = value
-		3: settings.thread = value
+		0: settings_data.master = value
+		1: settings_data.music = value
+		2: settings_data.sfx = value
+		3: settings_data.ambience = value
+		4: settings_data.thread_tension = value
+		5: settings_data.brightness = clampi(value, 50, 150)
+		6: settings_data.screen_shake = value
+	settings_data.apply_audio_buses()
 	_save_progress()
 
 func _adjust_setting(direction: int) -> void:
-	if settings_focus < 4:
-		var values := [int(settings.master), int(settings.music), int(settings.sfx), int(settings.thread)]
-		_set_slider(settings_focus, clampi(values[settings_focus] + direction * 5, 0, 100))
+	if settings_focus < 7:
+		var values := [
+			settings_data.master, settings_data.music, settings_data.sfx,
+			settings_data.ambience, settings_data.thread_tension,
+			settings_data.brightness, settings_data.screen_shake
+		]
+		var step := 5 if settings_focus != 5 else 5
+		var lo := 0 if settings_focus != 5 else 50
+		var hi := 100 if settings_focus != 5 else 150
+		_set_slider(settings_focus, clampi(values[settings_focus] + direction * step, lo, hi))
 	else:
 		_activate_setting(settings_focus)
 
 func _activate_setting(index: int) -> void:
 	match index:
-		4: settings.symbols = not bool(settings.symbols)
-		5: settings.motion = not bool(settings.motion)
-		6: settings.contrast = not bool(settings.contrast)
-		7: _close_settings()
+		7:
+			var presets := PinPanSettings.PRESET_NAMES
+			var idx := presets.find(settings_data.color_preset)
+			idx = posmod(idx + 1, presets.size())
+			settings_data.color_preset = presets[idx]
+		8: settings_data.symbols = not settings_data.symbols
+		9: settings_data.reduce_motion = not settings_data.reduce_motion
+		10: settings_data.reduced_flash = not settings_data.reduced_flash
+		11: settings_data.high_contrast = not settings_data.high_contrast
+		12:
+			settings_data.apply_audio_buses()
+			_close_settings()
+			ui_audio.play(PinPanUIAudio.Event.BACK, time)
+			return
 	_save_progress()
 
 func _close_settings() -> void:
+	settings_data.apply_audio_buses()
 	app_state = settings_return
 	state_time = 0.0
 
@@ -507,6 +622,9 @@ func _update_prologue(delta: float) -> void:
 			_finish_prologue()
 
 func _finish_prologue() -> void:
+	save_data.mark_prologue_done()
+	_sync_legacy_flags()
+	_save_progress()
 	_begin_act_gameplay(0)
 
 func _update_free_motion(delta: float, multiplier: float) -> void:
@@ -732,7 +850,11 @@ func _configure_room(index: int, announce: bool) -> void:
 	pin_vel = Vector2.ZERO
 	pan_vel = Vector2.ZERO
 	tension = 0.0
-	checkpoint_room = room
+	save_data.checkpoint_room = room
+	save_data.checkpoint = "ACT1_ROOM_%d" % room
+	save_data.memory_nodes = memory_nodes
+	save_data.memories = memories.duplicate()
+	_sync_legacy_flags()
 	_save_progress()
 	if announce:
 		room_message = room_title + "  —  " + room_subtitle
@@ -776,6 +898,13 @@ func _show_hint(message: String, duration: float) -> void:
 	mechanic_hint_time = duration
 
 func _update_camera(delta: float) -> void:
+	if app_state == AppState.MENU or app_state == AppState.SETTINGS or app_state == AppState.LOADING or app_state == AppState.EXIT_CONFIRM:
+		var target := menu_system.camera_offset(menu_system.pin_cursor.position)
+		if settings_data.reduce_motion:
+			target = Vector2.ZERO
+		menu_camera = menu_camera.lerp(target, minf(1.0, delta * 4.0))
+		camera_offset = menu_camera
+		return
 	if app_state != AppState.GAME:
 		camera_offset = camera_offset.lerp(Vector2.ZERO, minf(1.0, delta * 4.0))
 		return
@@ -1015,6 +1144,7 @@ func _update_room_logic(delta: float) -> void:
 func _next_room() -> void:
 	if room >= ACT_ONE_LAST_ROOM:
 		act_complete = true
+		save_data.act_one_complete = true
 		app_state = AppState.ACT_COMPLETE
 		state_time = 0.0
 		_save_progress()
@@ -1056,7 +1186,7 @@ func _show_message(message: String, duration: float) -> void:
 func _sfx(frequency: float, duration: float, gain: float = 0.18) -> void:
 	if sfx_player == null:
 		return
-	var volume := float(settings.master) / 100.0 * float(settings.sfx) / 100.0
+	var volume := float(settings_data.master) / 100.0 * float(settings_data.sfx) / 100.0
 	if volume <= 0.001:
 		return
 	var rate := 22050
@@ -1077,39 +1207,20 @@ func _sfx(frequency: float, duration: float, gain: float = 0.18) -> void:
 	sfx_player.play()
 
 func _save_progress() -> void:
-	var config := ConfigFile.new()
-	config.set_value("progress", "started", game_started)
-	config.set_value("progress", "act_complete", act_complete)
-	config.set_value("progress", "checkpoint_room", checkpoint_room)
-	config.set_value("progress", "memory_nodes", memory_nodes)
-	config.set_value("progress", "memories", memories)
-	config.set_value("progress", "ending", ending)
-	config.set_value("settings", "master", settings.master)
-	config.set_value("settings", "music", settings.music)
-	config.set_value("settings", "sfx", settings.sfx)
-	config.set_value("settings", "thread", settings.thread)
-	config.set_value("settings", "symbols", settings.symbols)
-	config.set_value("settings", "motion", settings.motion)
-	config.set_value("settings", "contrast", settings.contrast)
-	config.save("user://pinpan.save")
+	save_data.game_started = game_started or save_data.game_started
+	save_data.act_one_complete = act_complete
+	save_data.checkpoint_room = checkpoint_room
+	save_data.memory_nodes = memory_nodes
+	save_data.memories = memories.duplicate()
+	save_data.save(settings_data)
 
 func _load_save() -> void:
 	var config := ConfigFile.new()
-	if config.load("user://pinpan.save") != OK:
-		return
-	game_started = bool(config.get_value("progress", "started", false))
-	act_complete = bool(config.get_value("progress", "act_complete", false))
-	checkpoint_room = int(config.get_value("progress", "checkpoint_room", 0))
-	memory_nodes = int(config.get_value("progress", "memory_nodes", 0))
-	memories.assign(config.get_value("progress", "memories", []))
-	ending = str(config.get_value("progress", "ending", ""))
-	settings.master = int(config.get_value("settings", "master", 80))
-	settings.music = int(config.get_value("settings", "music", 80))
-	settings.sfx = int(config.get_value("settings", "sfx", 80))
-	settings.thread = int(config.get_value("settings", "thread", 65))
-	settings.symbols = bool(config.get_value("settings", "symbols", false))
-	settings.motion = bool(config.get_value("settings", "motion", false))
-	settings.contrast = bool(config.get_value("settings", "contrast", false))
+	if config.load(PinPanSave.SAVE_PATH) == OK:
+		settings_data.load_from(config)
+	save_data.load()
+	settings_data.apply_audio_buses()
+	_sync_legacy_flags()
 
 func _draw() -> void:
 	var scale_factor: float = min(get_viewport_rect().size.x / SIZE.x, get_viewport_rect().size.y / SIZE.y)
@@ -1179,17 +1290,26 @@ func _draw_intro() -> void:
 			_draw_text("PIN&PAN", Vector2(708, 280), 62, Color(UI, title_alpha), 3.0)
 	if t > 9.15 and t < 9.65:
 		draw_rect(Rect2(Vector2.ZERO, SIZE), Color(1.0, 0.98, 0.93, sin((t - 9.15) / 0.5 * PI) * 0.82), true)
+	if t >= 3.0:
+		_draw_text("SPACE — ПРОПУСТИТЬ", Vector2(1565, 1000), 14, Color(MUTED, 0.55), 1.0)
 
 func _draw_menu_screen() -> void:
+	var shake := Vector2.ZERO
+	if menu_system.error_shake > 0.0:
+		shake = Vector2(randf_range(-1, 1), randf_range(-1, 1)) * menu_system.error_shake
+	draw_set_transform(camera_offset + shake, 0.0, Vector2.ONE)
 	draw_rect(Rect2(Vector2.ZERO, SIZE), VOID, true)
 	_draw_menu_background()
-	_draw_cloth(Vector2(1420, 610), LINEN)
-	var idle := sin(time * TAU / 7.0)
-	_draw_thread(Vector2(1315, 535), Vector2(1515, 490), 0.18 + absf(idle) * 0.12, WARM)
-	_draw_character(Vector2(1315, 535), true, 1.0 + idle * 0.025, 0.0)
-	_draw_character(Vector2(1515, 490), false, 0.98 - idle * 0.025, 4.0 + sin(time * 0.7) * 5.0)
+	var idle := menu_system.idle_phase()
+	var cloth_sway := 0.0 if settings_data.reduce_motion else sin(time * TAU / 6.4) * 3.0
+	_draw_cloth(Vector2(1420, 610 + cloth_sway), LINEN)
+	var pin_pos_menu := menu_system.pin_menu_pos()
+	var pan_pos_menu := menu_system.pan_menu_pos(idle)
+	var thread_amount: float = 0.18 + float(idle.get("thread_tension", 0.0)) * 0.55
+	_draw_thread(pin_pos_menu, pan_pos_menu, thread_amount, WARM)
+	_draw_character(pin_pos_menu, true, idle.get("pin_brightness", 1.0), 0.0)
+	_draw_character(pan_pos_menu, false, idle.get("pan_brightness", 0.98), idle.get("pan_tilt", 2.0))
 	_draw_text("PIN&PAN", Vector2(180, 200), 64, UI, 3.0)
-	_draw_text("НИТЬ, КОТОРАЯ ВЕДЁТ ДАЛЬШЕ", Vector2(184, 238), 15, MUTED, 1.2)
 	if app_state == AppState.MENU or app_state == AppState.LOADING:
 		_draw_menu_options()
 	elif app_state == AppState.SETTINGS:
@@ -1198,9 +1318,18 @@ func _draw_menu_screen() -> void:
 	elif app_state == AppState.EXIT_CONFIRM:
 		_draw_menu_options(0.26)
 		_draw_exit_confirm()
+	if play_confirm:
+		_draw_menu_options(0.26)
+		_draw_play_confirm()
 	if app_state == AppState.LOADING:
 		_draw_loading()
-	_draw_cursor()
+	if menu_system.state == MenuSystem.MenuState.ERROR:
+		_draw_text("НЕ УДАЛОСЬ ЗАГРУЗИТЬ", Vector2(760, 480), 28, DANGER, 1.5)
+	menu_system.pin_cursor.draw_on(self, WARM)
+	if settings_data.brightness != 100:
+		var b := settings_data.brightness_tint()
+		draw_rect(Rect2(Vector2.ZERO, SIZE), Color(b.r, b.g, b.b, absf(float(settings_data.brightness) - 100.0) / 100.0 * 0.25), true)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_menu_background() -> void:
 	for i in range(8):
@@ -1218,11 +1347,20 @@ func _draw_menu_background() -> void:
 func _draw_menu_options(alpha := 1.0) -> void:
 	var options := _menu_options()
 	for i in options.size():
-		var y := 595.0 + i * 76.0
-		var focused := i == menu_focus and app_state != AppState.LOADING
+		var rect := menu_system.row_rect(i, save_data)
+		var focused := i == menu_focus and app_state != AppState.LOADING and not play_confirm
+		var scale := menu_system.item_scales[i] if i < menu_system.item_scales.size() else 1.0
 		if focused:
-			draw_style_box(_focus_style(), Rect2(158, y - 43, 470, 60))
-		_draw_text(options[i], Vector2(180, y), 32.0 * (1.05 if focused else 1.0), Color(UI if focused else MUTED, alpha), 2.1)
+			draw_style_box(_focus_style(), rect.grow(4.0))
+		_draw_text(options[i], Vector2(rect.position.x + 18.0, rect.get_center().y + 10.0), 32.0 * scale, Color(UI if focused else MUTED, alpha), 2.1)
+
+func _draw_play_confirm() -> void:
+	draw_rect(Rect2(610, 350, 700, 370), Color("121218fa"), true)
+	draw_rect(Rect2(610, 350, 700, 370), Color(FOCUS, 0.5), false, 2.0)
+	_draw_text("НАЧАТЬ НОВУЮ ИГРУ?", Vector2(690, 465), 34, UI, 1.5)
+	_draw_text("ТЕКУЩЕЕ СОХРАНЕНИЕ ОСТАНЕТСЯ", Vector2(655, 505), 16, MUTED, 0.9)
+	_draw_button(Rect2(690, 520, 270, 64), "ИГРАТЬ", true)
+	_draw_button(Rect2(970, 520, 270, 64), "НАЗАД", false)
 
 func _focus_style() -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
@@ -1239,26 +1377,41 @@ func _draw_settings() -> void:
 	draw_rect(Rect2(350, 110, 1220, 850), Color("121218f5"), true)
 	draw_rect(Rect2(350, 110, 1220, 850), Color(FOCUS, 0.38), false, 2.0)
 	_draw_text("НАСТРОЙКИ", Vector2(425, 190), 40, UI, 2.0)
-	_draw_text("МЫШЬЮ: ТЯНИ ПОЛЗУНОК.  ESC: НАЗАД", Vector2(427, 225), 16, MUTED, 1.0)
 	var rows := _settings_rows()
 	for i in rows.size():
-		var y := 355.0 + i * 62.0
+		var y := 280.0 + i * 56.0
 		var focused := i == settings_focus
 		if focused:
 			draw_style_box(_focus_style(), Rect2(414, y - 39, 1085, 52))
-		_draw_text(rows[i], Vector2(448, y), 24, UI if focused else MUTED, 1.4)
-		if i < 4:
-			var values := [int(settings.master), int(settings.music), int(settings.sfx), int(settings.thread)]
-			draw_rect(Rect2(900, y - 22, 390, 8), Color(MUTED, 0.30), true)
-			draw_rect(Rect2(900, y - 22, values[i] * 3.9, 8), FOCUS, true)
-			draw_circle(Vector2(900 + values[i] * 3.9, y - 18), 9, FOCUS)
+		_draw_text(rows[i], Vector2(448, y), 22, UI if focused else MUTED, 1.2)
+		if i < 7:
+			var values := [
+				settings_data.master, settings_data.music, settings_data.sfx,
+				settings_data.ambience, settings_data.thread_tension,
+				settings_data.brightness, settings_data.screen_shake
+			]
+			var slider_w := 390.0
+			var fill := float(values[i]) / (150.0 if i == 5 else 100.0) * slider_w
+			draw_rect(Rect2(900, y - 22, slider_w, 8), Color(MUTED, 0.30), true)
+			draw_rect(Rect2(900, y - 22, fill, 8), FOCUS, true)
+			draw_circle(Vector2(900 + fill, y - 18), 9, FOCUS)
 			_draw_text(str(values[i]), Vector2(1340, y), 21, UI, 1.0)
-		elif i == 4:
-			_draw_text("ВКЛ" if bool(settings.symbols) else "ВЫКЛ", Vector2(1190, y), 22, FOCUS, 1.0)
-		elif i == 5:
-			_draw_text("ВКЛ" if bool(settings.motion) else "ВЫКЛ", Vector2(1190, y), 22, FOCUS, 1.0)
-		elif i == 6:
-			_draw_text("ВКЛ" if bool(settings.contrast) else "ВЫКЛ", Vector2(1190, y), 22, FOCUS, 1.0)
+		elif i == 7:
+			var preset_label := settings_data.color_preset
+			match preset_label:
+				"BASE": preset_label = "БАЗОВАЯ"
+				"PROTANOPIA": preset_label = "ПРОТАНОПИЯ"
+				"DEUTERANOPIA": preset_label = "ДЕЙТЕРАНОПИЯ"
+				"TRITANOPIA": preset_label = "ТРИТАНОПИЯ"
+			_draw_text(preset_label, Vector2(1090, y), 22, FOCUS, 1.0)
+		elif i == 8:
+			_draw_text("ВКЛ" if settings_data.symbols else "ВЫКЛ", Vector2(1190, y), 22, FOCUS, 1.0)
+		elif i == 9:
+			_draw_text("ВКЛ" if settings_data.reduce_motion else "ВЫКЛ", Vector2(1190, y), 22, FOCUS, 1.0)
+		elif i == 10:
+			_draw_text("ВКЛ" if settings_data.reduced_flash else "ВЫКЛ", Vector2(1190, y), 22, FOCUS, 1.0)
+		elif i == 11:
+			_draw_text("ВКЛ" if settings_data.high_contrast else "ВЫКЛ", Vector2(1190, y), 22, FOCUS, 1.0)
 
 func _draw_exit_confirm() -> void:
 	draw_rect(Rect2(610, 350, 700, 370), Color("121218fa"), true)
@@ -1271,7 +1424,9 @@ func _draw_loading() -> void:
 	draw_rect(Rect2(0, 0, 1920, 1080), Color(VOID, 0.72), true)
 	_draw_text("НИТЬ ВЕДЁТ ВПЕРЁД", Vector2(715, 520), 28, UI, 1.8)
 	draw_rect(Rect2(720, 558, 480, 8), Color(MUTED, 0.3), true)
-	draw_rect(Rect2(720, 558, 480 * loading, 8), WARM, true)
+	draw_rect(Rect2(720, 558, 480 * menu_system.loading_progress, 8), WARM, true)
+	if menu_system.transition_active:
+		draw_rect(Rect2(0, 0, 1920, 1080), Color(0, 0, 0, menu_system.transition_fade * 0.85), true)
 
 func _draw_prologue() -> void:
 	draw_rect(Rect2(Vector2.ZERO, SIZE), VOID, true)
@@ -1366,7 +1521,7 @@ func _draw_linen_background() -> void:
 	for i in range(150):
 		var x := fposmod(float(i * 71), 1920.0)
 		var base_y := 690.0 + fposmod(float(i * 37), 400.0)
-		var sway := 0.0 if bool(settings.motion) else sin(time * 1.2 + i) * 5.0
+		var sway := 0.0 if settings_data.reduce_motion else sin(time * 1.2 + i) * 5.0
 		draw_line(Vector2(x, base_y), Vector2(x + sway, base_y - 85.0 - float(i % 5) * 11.0), Color(LINEN, 0.42), 2.0)
 	for i in range(8):
 		var x := 1050.0 + i * 94.0
@@ -1390,7 +1545,7 @@ func _draw_peaks_background() -> void:
 		draw_polyline(PackedVector2Array([ridge[0], ridge[1], ridge[2]]), Color("b9adca", 0.28), 3.0)
 	for i in range(34):
 		var y := 180.0 + float(i) * 22.0
-		var drift := 0.0 if bool(settings.motion) else sin(time * 2.0 + i * 0.4) * 35.0
+		var drift := 0.0 if settings_data.reduce_motion else sin(time * 2.0 + i * 0.4) * 35.0
 		draw_line(Vector2(80 + drift, y), Vector2(740 + drift, y - 15), Color("c6d8ff", 0.11), 2.0)
 	if wind_strength > 0.0:
 		var arrow_x := 1660.0 if wind_direction < 0.0 else 260.0
@@ -1580,7 +1735,7 @@ func _draw_button(rect: Rect2, label: String, focused: bool) -> void:
 	_draw_text(label, Vector2(rect.get_center().x - width * 0.5, rect.get_center().y + 8), 22, color, 1.3)
 
 func _draw_cloth(center: Vector2, color: Color) -> void:
-	var sway := 0.0 if bool(settings.motion) else sin(time * TAU / 6.4) * 3.0
+	var sway := 0.0 if settings_data.reduce_motion else sin(time * TAU / 6.4) * 3.0
 	var pts := PackedVector2Array([center + Vector2(-235, 40 + sway), center + Vector2(-150, -70), center + Vector2(10, -92), center + Vector2(220, -15), center + Vector2(185, 78), center + Vector2(-110, 98)])
 	draw_colored_polygon(pts, Color(color, 0.46))
 	for i in range(6):
@@ -1588,10 +1743,10 @@ func _draw_cloth(center: Vector2, color: Color) -> void:
 
 func _draw_character(pos: Vector2, is_pin: bool, scale_factor: float, tilt: float) -> void:
 	var r := 35.0 * scale_factor
-	var core := PIN if is_pin else PAN
+	var core := PinPanPalette.pin_color(settings_data.color_preset) if is_pin else PinPanPalette.pan_color(settings_data.color_preset)
 	var deep := PIN_DEEP if is_pin else PAN_DEEP
 	var glow := PIN_GLOW if is_pin else PAN_GLOW
-	var outline := UI if bool(settings.contrast) else deep
+	var outline := UI if settings_data.high_contrast else deep
 	draw_circle(pos, r * 1.75, Color(glow, 0.10))
 	draw_circle(pos, r * 1.25, Color(glow, 0.17))
 	if is_pin:
@@ -1599,15 +1754,16 @@ func _draw_character(pos: Vector2, is_pin: bool, scale_factor: float, tilt: floa
 		draw_colored_polygon(points, outline)
 		var inside := PackedVector2Array([pos + Vector2(0, -r * 0.72), pos + Vector2(r * 0.58, 0), pos + Vector2(r * 0.30, r * 0.60), pos + Vector2(-r * 0.32, r * 0.60), pos + Vector2(-r * 0.58, 0)])
 		draw_colored_polygon(inside, core)
-		if bool(settings.symbols):
+		if settings_data.symbols:
 			var marker := PackedVector2Array([pos + Vector2(0, -r * 1.8), pos + Vector2(-7, -r * 1.54), pos + Vector2(7, -r * 1.54)])
 			draw_polyline(PackedVector2Array([marker[0], marker[1], marker[2], marker[0]]), UI, 1.5)
 	else:
-		draw_circle(pos, r, outline)
-		draw_circle(pos + Vector2(-r * 0.12, -r * 0.10), r * 0.77, core)
-		draw_circle(pos + Vector2(r * 0.43, -r * 0.27), r * 0.34, core)
-		if bool(settings.symbols):
-			draw_arc(pos + Vector2(0, -r * 1.68), 8.0, 0.0, TAU, 8, UI, 1.5)
+		var droplet := pos + Vector2(sin(deg_to_rad(tilt)) * 6.0, 0.0)
+		draw_circle(droplet, r, outline)
+		draw_circle(droplet + Vector2(-r * 0.12, -r * 0.10), r * 0.77, core)
+		draw_circle(droplet + Vector2(r * 0.43, -r * 0.27), r * 0.34, core)
+		if settings_data.symbols:
+			draw_arc(droplet + Vector2(0, -r * 1.68), 8.0, 0.0, TAU, 8, UI, 1.5)
 
 func _draw_thread(a: Vector2, b: Vector2, amount: float, color: Color) -> void:
 	var midpoint := (a + b) * 0.5 + Vector2(0, 54.0 * (1.0 - amount))

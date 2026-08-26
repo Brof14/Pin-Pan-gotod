@@ -28,6 +28,10 @@ window/size/window_height_override=720
 
 3d/physics_engine="Jolt Physics"
 
+[audio]
+
+buses/default_bus_layout="res://audio/default_bus_layout.tres"
+
 [rendering]
 
 rendering_device/driver.windows="d3d12"
