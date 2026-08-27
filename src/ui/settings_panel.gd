@@ -64,8 +64,8 @@ func _draw_row(i: int, font: Font, settings: PinPanSettings) -> void:
 		TextFX.spaced(self, font, str(value), Vector2(1310, y), 20, color)
 	elif i == 7:
 		TextFX.spaced(self, font, _preset_label(settings.color_preset), Vector2(1090, y), 21, PinPanPalette.FOCUS, 1.5)
-	elif i >= 8 and i <= 11:
-		var on: bool = [false, false, false, false, false, false, false, false,
+	else:
+			var on: bool = [false, false, false, false, false, false, false, false,
 			settings.symbols, settings.reduce_motion, settings.reduced_flash, settings.high_contrast][i]
 		draw_rect(Rect2(1090, y - 20, 54, 24), Color(PinPanPalette.FOCUS, 0.12 if on else 0.05), true)
 		draw_rect(Rect2(1090, y - 20, 54, 24), Color(PinPanPalette.FOCUS, 0.8), false, 1.5)
