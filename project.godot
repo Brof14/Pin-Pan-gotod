@@ -11,26 +11,32 @@ config_version=5
 [application]
 
 config/name="Pin&Pan"
+run/main_scene="res://scenes/Main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
-run/main_scene="res://scenes/Main.tscn"
-
-[display]
-
-window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
-window/size/viewport_width=1920
-window/size/viewport_height=1080
-window/size/window_width_override=1280
-window/size/window_height_override=720
-
-[physics]
-
-3d/physics_engine="Jolt Physics"
+boot_splash/bg_color=Color(0.0392157, 0.0392157, 0.054902, 1)
+boot_splash/show_image=false
 
 [audio]
 
 buses/default_bus_layout="res://audio/default_bus_layout.tres"
+
+[autoload]
+
+PinPan="*res://src/core/core.gd"
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
 
 [rendering]
 
